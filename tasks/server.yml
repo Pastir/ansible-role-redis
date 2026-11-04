@@ -1,0 +1,109 @@
+---
+# redis.conf belongs to Redis: CONFIG REWRITE and Sentinel failovers write into it
+# (replicaof, ...). The role owns only redis.ansible.conf, included at the END of
+# redis.conf so that its settings win.
+- name: Write managed Redis settings
+  ansible.builtin.template:
+    src: redis.ansible.conf.j2
+    dest: "{{ redis_managed_conf }}"
+    owner: redis
+    group: redis
+    mode: "0640"
+  register: __redis_managed
+
+- name: Include managed settings at the end of redis.conf
+  ansible.builtin.lineinfile:
+    path: /etc/redis/redis.conf
+    line: "include {{ redis_managed_conf }}"
+    insertafter: EOF
+  register: __redis_include
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Enable and start Redis
+  ansible.builtin.systemd_service:
+    name: redis-server
+    enabled: true
+    state: started
+
+- name: Point a freshly bootstrapped replica at the initial master
+  ansible.builtin.shell:
+    cmd: |
+      set -eo pipefail
+      role=$({{ __redis_cli }} info replication | awk -F: '/^role:/{print $2}' | tr -d '\r')
+      replicas=$({{ __redis_cli }} info replication | awk -F: '/^connected_slaves:/{print $2}' | tr -d '\r')
+      keys=$({{ __redis_cli }} dbsize)
+      # Only an empty, stand-alone master is converted; anything else was set up by Sentinel or by hand.
+      if [ "$role" = master ] && [ "$replicas" = 0 ] && [ "$keys" = 0 ]; then
+        {{ __redis_cli }} replicaof {{ __redis_master_ip }} {{ redis_port }} >/dev/null
+        {{ __redis_cli }} config rewrite >/dev/null
+        echo converted
+      fi
+    executable: /bin/bash
+  environment:
+    REDISCLI_AUTH: "{{ redis_password if redis_password else omit }}"
+  register: __redis_replicaof
+  changed_when: "'converted' in __redis_replicaof.stdout"
+  when:
+    - redis_sentinel_enabled
+    - not __redis_is_initial_master
+    - __redis_install is changed or (ansible_facts.services['redis-server.service'].state | default('')) != 'running'
+  no_log: false
+
+# CONFIG SET applies a change without restart; CONFIG REWRITE then persists it in
+# redis.conf too, so lines Redis appended there never shadow the managed file.
+- name: Apply changed settings
+  when: __redis_managed is changed or __redis_include is changed
+  block:
+    - name: Apply settings at runtime (CONFIG SET)
+      ansible.builtin.command:
+        argv:
+          - redis-cli
+          - -h
+          - 127.0.0.1
+          - -p
+          - "{{ redis_port | string }}"
+          - config
+          - set
+          - "{{ item.key }}"
+          - "{{ item.value | join(' ') if (item.value is iterable and item.value is not string) else item.value | string }}"
+      environment:
+        REDISCLI_AUTH: "{{ redis_password if redis_password else omit }}"
+      loop: "{{ __redis_effective_config | dict2items | rejectattr('value', 'none') }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: __redis_config_set
+      changed_when: __redis_config_set.stdout == 'OK'
+      failed_when: false
+      no_log: "{{ item.key in ['requirepass', 'masterauth'] }}"
+
+    - name: Persist runtime settings (CONFIG REWRITE)
+      ansible.builtin.command: "{{ __redis_cli }} config rewrite"
+      environment:
+        REDISCLI_AUTH: "{{ redis_password if redis_password else omit }}"
+      register: __redis_rewrite
+      changed_when: true
+      failed_when: __redis_rewrite.stdout != 'OK'
+
+    - name: Collect settings that need a restart
+      ansible.builtin.set_fact:
+        __redis_restart_needed: "{{ __redis_config_set.results | rejectattr('stdout', 'equalto', 'OK') | map(attribute='item.key') | list }}"
+
+    - name: Restart Redis for settings that cannot change at runtime
+      ansible.builtin.systemd_service:
+        name: redis-server
+        state: restarted
+      when:
+        - __redis_restart_needed | length > 0
+        - redis_restart_allowed
+      throttle: 1
+
+    - name: Report settings waiting for a restart
+      ansible.builtin.debug:
+        msg: >-
+          Redis on {{ inventory_hostname }} must be restarted to apply: {{ __redis_restart_needed | join(', ') }}.
+          Restart replicas first, or set redis_restart_allowed: true.
+      when:
+        - __redis_restart_needed | length > 0
+        - not redis_restart_allowed

@@ -1,0 +1,98 @@
+---
+# sentinel.conf is rewritten by Sentinel itself all the time (epochs, known replicas and
+# sentinels). The role writes it only when Sentinel does not monitor anything yet; afterwards
+# every setting is applied at runtime (SENTINEL SET / SENTINEL CONFIG SET), and Sentinel
+# persists it on its own.
+# The Ubuntu package ships "sentinel monitor mymaster 127.0.0.1 6379 2", so a monitor line alone
+# proves nothing. Configured = written by this role, or Sentinel already tracks a real set.
+- name: Check whether Sentinel is already configured
+  ansible.builtin.command: >-
+    grep -Eq '^(# Initial Sentinel configuration written by Ansible|sentinel known-(replica|sentinel) {{ redis_sentinel_master_name | regex_escape }} )'
+    /etc/redis/sentinel.conf
+  register: __redis_sentinel_configured
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Write initial sentinel.conf
+  ansible.builtin.template:
+    src: sentinel.conf.j2
+    dest: /etc/redis/sentinel.conf
+    owner: redis
+    group: redis
+    mode: "0640"
+  when: __redis_sentinel_configured.rc != 0
+  register: __redis_sentinel_initial
+
+- name: Enable and start Sentinel
+  ansible.builtin.systemd_service:
+    name: redis-sentinel
+    enabled: true
+    state: "{{ 'restarted' if __redis_sentinel_initial is changed else 'started' }}"
+
+- name: Wait for Sentinel
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ redis_sentinel_port }}"
+    timeout: 30
+  when: not ansible_check_mode
+
+- name: Read current Sentinel settings
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      {{ __redis_sentinel_cli }} sentinel config get announce-ip | tail -n 1
+      {{ __redis_sentinel_cli }} sentinel master {{ redis_sentinel_master_name }} | paste - - | tr '\t' '='
+    executable: /bin/bash
+  register: __redis_sentinel_state
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode or __redis_sentinel_configured.rc == 0
+
+- name: Parse Sentinel settings
+  ansible.builtin.set_fact:
+    __redis_sentinel_announce: "{{ __redis_sentinel_state.stdout_lines[0] | default('') }}"
+    __redis_sentinel_master: "{{ dict(__redis_sentinel_state.stdout_lines[1:] | map('split', '=', 1)) }}"
+  when: __redis_sentinel_state.stdout_lines is defined
+
+- name: Set announced address of this Sentinel
+  ansible.builtin.command: "{{ __redis_sentinel_cli }} sentinel config set announce-ip {{ redis_announce_ip }}"
+  register: __redis_sentinel_announce_set
+  changed_when: true
+  when: __redis_sentinel_announce | default(redis_announce_ip) != redis_announce_ip
+
+- name: Apply monitored master settings
+  ansible.builtin.command: >-
+    {{ __redis_sentinel_cli }} sentinel set {{ redis_sentinel_master_name }} {{ item.key }} {{ item.value }}
+  loop: "{{ __redis_sentinel_wanted | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}={{ item.value if item.key != 'auth-pass' else '***' }}"
+  vars:
+    __redis_sentinel_wanted: >-
+      {{ {'quorum': redis_sentinel_quorum | string,
+          'down-after-milliseconds': redis_sentinel_down_after_ms | string,
+          'failover-timeout': redis_sentinel_failover_timeout | string,
+          'parallel-syncs': redis_sentinel_parallel_syncs | string}
+         | combine({'auth-pass': redis_password} if redis_password else {}) }}
+  when:
+    - __redis_sentinel_master is defined
+    - item.key == 'auth-pass' or __redis_sentinel_master[item.key] | default('') != item.value
+    # auth-pass is not readable back; set it only when the master looks unreachable or on first setup.
+    - item.key != 'auth-pass' or __redis_sentinel_initial is changed or 'disconnected' in __redis_sentinel_master.flags | default('')
+  changed_when: true
+  no_log: "{{ item.key == 'auth-pass' }}"
+
+# Dropping stale entries (e.g. a sentinel seen as 127.0.0.1) needs SENTINEL RESET.
+# One sentinel at a time; it rediscovers the others through hello messages.
+- name: Reset Sentinel state after an announce address change
+  ansible.builtin.shell:
+    cmd: |
+      {{ __redis_sentinel_cli }} sentinel reset {{ redis_sentinel_master_name }}
+      sleep {{ redis_sentinel_reset_pause | int }}
+    executable: /bin/bash
+  throttle: 1
+  changed_when: true
+  when:
+    - redis_sentinel_reset_on_announce_change
+    - __redis_sentinel_announce_set is changed
+    - __redis_sentinel_initial is not changed

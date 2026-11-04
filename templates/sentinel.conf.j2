@@ -1,0 +1,20 @@
+# Initial Sentinel configuration written by Ansible ({{ ansible_managed }}).
+# Sentinel rewrites this file at runtime; later changes are applied with SENTINEL SET.
+port {{ redis_sentinel_port }}
+bind {{ redis_sentinel_bind | join(' ') }}
+daemonize no
+supervised systemd
+pidfile /run/sentinel/redis-sentinel.pid
+logfile /var/log/redis/redis-sentinel.log
+dir /var/lib/redis
+sentinel announce-ip {{ redis_announce_ip }}
+sentinel resolve-hostnames no
+sentinel announce-hostnames no
+sentinel deny-scripts-reconfig yes
+sentinel monitor {{ redis_sentinel_master_name }} {{ __redis_master_ip }} {{ redis_port }} {{ redis_sentinel_quorum }}
+sentinel down-after-milliseconds {{ redis_sentinel_master_name }} {{ redis_sentinel_down_after_ms }}
+sentinel failover-timeout {{ redis_sentinel_master_name }} {{ redis_sentinel_failover_timeout }}
+sentinel parallel-syncs {{ redis_sentinel_master_name }} {{ redis_sentinel_parallel_syncs }}
+{% if redis_password %}
+sentinel auth-pass {{ redis_sentinel_master_name }} {{ redis_password }}
+{% endif %}

@@ -1,0 +1,37 @@
+---
+- name: Use another release's archive
+  ansible.builtin.include_tasks: apt_suite.yml
+  when:
+    - redis_apt_suite | length > 0
+    - redis_apt_suite != ansible_facts['distribution_release']
+
+- name: Gather installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Refuse implicit Redis version change
+  ansible.builtin.assert:
+    that:
+      - redis_allow_upgrade or ansible_facts.packages['redis-server'][0].version is search(':' ~ (__redis_version | regex_escape) ~ '-')
+    fail_msg: >-
+      redis-server {{ ansible_facts.packages['redis-server'][0].version }} is installed but {{ __redis_version }} is required.
+      Re-run with -e redis_allow_upgrade=true (Redis restarts; on a replication set do replicas first).
+    quiet: true
+  when: "'redis-server' in ansible_facts.packages"
+
+- name: Install Redis packages
+  ansible.builtin.apt:
+    name: "{{ __redis_packages | map('regex_replace', '$', '=*:' ~ __redis_version ~ '-*') | list }}"
+    state: present
+    update_cache: true
+    cache_valid_time: "{{ 0 if (__redis_suite_repo | default({}) is changed or __redis_suite_pin | default({}) is changed
+      or __redis_suite_pkg_pin | default({}) is changed) else 3600 }}"
+    allow_change_held_packages: true
+  register: __redis_install
+
+- name: Hold Redis packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ __redis_packages }}"
+  when: redis_hold and not ansible_check_mode

@@ -1,0 +1,69 @@
+---
+# 1. Runtime config change on every node: applied without restart.
+# 2. Failover: stop the master, Sentinel promotes a replica. Re-running the role must keep
+#    the new topology (no node is pointed back at the initial master).
+- name: Runtime change without restart
+  hosts: all
+  become: true
+  tasks:
+    - name: Remember Redis PID
+      ansible.builtin.systemd_service:
+        name: redis-server
+      register: __before
+
+    - name: Apply changed settings
+      ansible.builtin.include_role:
+        name: pastir.redis
+      vars:
+        redis_config:
+          protected-mode: "yes"
+          maxmemory-policy: allkeys-lru
+          save:
+            - 900 1
+
+    - name: Redis was not restarted
+      ansible.builtin.systemd_service:
+        name: redis-server
+      register: __after
+      failed_when: __after.status.MainPID != __before.status.MainPID
+
+- name: Failover
+  hosts: redis
+  become: true
+  environment:
+    REDISCLI_AUTH: molecule-secret
+  tasks:
+    - name: Stop Redis on the initial master
+      ansible.builtin.systemd_service:
+        name: redis-server
+        state: stopped
+      when: inventory_hostname == 'redis1-noble'
+
+    - name: Wait for Sentinel to promote another node
+      ansible.builtin.command: redis-cli -p 26379 sentinel get-master-addr-by-name mymaster
+      register: __master
+      until: __master.stdout_lines[0] != hostvars['redis1-noble'].ansible_facts.default_ipv4.address
+      retries: 30
+      delay: 2
+      changed_when: false
+      when: inventory_hostname == 'redis2-noble'
+
+    - name: Start the old master again (it rejoins as a replica)
+      ansible.builtin.systemd_service:
+        name: redis-server
+        state: started
+      when: inventory_hostname == 'redis1-noble'
+
+    - name: Give the old master time to be reconfigured by Sentinel
+      ansible.builtin.pause:
+        seconds: 15
+
+    - name: Re-run the role after failover
+      ansible.builtin.include_role:
+        name: pastir.redis
+      vars:
+        redis_config:
+          protected-mode: "yes"
+          maxmemory-policy: allkeys-lru
+          save:
+            - 900 1

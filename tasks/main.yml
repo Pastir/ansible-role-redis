@@ -1,0 +1,26 @@
+---
+- name: Validate input
+  ansible.builtin.assert:
+    that:
+      - __redis_version | length > 0
+      - redis_cluster_group in group_names or not redis_sentinel_enabled
+      - redis_initial_master in groups[redis_cluster_group] | default([redis_initial_master])
+      - redis_sentinel_quorum | int >= 1
+    fail_msg: >-
+      Set redis_version (no default for {{ ansible_facts['distribution_release'] }}); with Sentinel the host
+      must be in group '{{ redis_cluster_group }}' and redis_initial_master must be one of its hosts.
+    quiet: true
+  tags: [redis, redis_install, redis_config, redis_sentinel]
+
+- name: Install Redis
+  ansible.builtin.import_tasks: install.yml
+  tags: [redis, redis_install]
+
+- name: Configure Redis server
+  ansible.builtin.import_tasks: server.yml
+  tags: [redis, redis_config]
+
+- name: Configure Redis Sentinel
+  ansible.builtin.import_tasks: sentinel.yml
+  when: redis_sentinel_enabled | bool
+  tags: [redis, redis_sentinel]

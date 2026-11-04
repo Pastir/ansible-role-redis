@@ -1,0 +1,59 @@
+---
+# --- Packages ----------------------------------------------------------------------
+# Packages come from the Ubuntu archive.
+# Exact upstream version to install and hold, e.g. "7.0.15". Empty -> the release default
+# of redis_apt_suite or the host release (noble: 7.0.15, resolute: 8.0.5).
+redis_version: ""
+redis_hold: true
+# Take the packages from another Ubuntu release's archive, e.g. "noble" on 26.04 to keep 7.0.15
+# (checked to install and run there). Empty -> the host's release.
+redis_apt_suite: ""
+redis_apt_archive_url: http://archive.ubuntu.com/ubuntu
+# Allow the role to change the installed version (restarts Redis).
+redis_allow_upgrade: false
+
+# --- Server ----------------------------------------------------------------------------
+redis_port: 6379
+# Addresses to bind. Default: the host's main IPv4 and loopback.
+redis_bind:
+  - "{{ ansible_facts['default_ipv4']['address'] }}"
+  - 127.0.0.1
+# Password for clients (requirepass) and for replicas talking to the master (masterauth).
+# Empty -> no authentication.
+redis_password: ""
+# Settings written to the managed include file (redis.ansible.conf), which is included at the
+# END of redis.conf and therefore wins over it. Keys are Redis directive names.
+#   value: scalar -> "key value"; list -> one line per item (e.g. save); null -> line omitted.
+redis_config:
+  protected-mode: "yes"
+  maxmemory-policy: noeviction
+# Restart Redis when a changed setting cannot be applied at runtime with CONFIG SET.
+# false -> such settings are only reported.
+redis_restart_allowed: false
+
+# Path of the managed include file.
+redis_managed_conf: /etc/redis/redis.ansible.conf
+
+# --- Replication / Sentinel ------------------------------------------------------------
+# Inventory group of all Redis nodes of one replication set.
+redis_cluster_group: redis
+# Node that becomes master when the set is bootstrapped (later Sentinel decides).
+redis_initial_master: "{{ groups[redis_cluster_group] | first }}"
+# Address other nodes use to reach this node.
+redis_announce_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+
+redis_sentinel_enabled: false
+redis_sentinel_port: 26379
+redis_sentinel_bind:
+  - "{{ ansible_facts['default_ipv4']['address'] }}"
+  - 127.0.0.1
+redis_sentinel_master_name: mymaster
+redis_sentinel_quorum: 2
+redis_sentinel_down_after_ms: 30000
+redis_sentinel_failover_timeout: 180000
+redis_sentinel_parallel_syncs: 1
+# When the announced address of a sentinel changes (or was never set), reset the
+# sentinel's view of the cluster so stale entries (e.g. 127.0.0.1) are dropped.
+# Done one sentinel at a time with a pause in between.
+redis_sentinel_reset_on_announce_change: true
+redis_sentinel_reset_pause: 15

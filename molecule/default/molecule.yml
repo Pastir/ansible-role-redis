@@ -1,0 +1,69 @@
+---
+# Sentinel set: two 24.04 nodes and one 26.04 node, all Redis 7.0.15 (26.04 takes it from the noble
+# archive, redis_apt_suite), 1 master + 2 replicas, Sentinel on each.
+# standalone: one 26.04 node (Redis 8.0) without Sentinel. Redis 7 replicas cannot follow an 8.0 master,
+# so releases are not mixed within one replication set.
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: podman
+platforms:
+  - name: redis1-noble
+    image: docker.io/library/ubuntu:24.04
+    dockerfile: Dockerfile.j2
+    command: /lib/systemd/systemd
+    systemd: always
+    network: molecule-redis
+    groups: [redis]
+  - name: redis2-noble
+    image: docker.io/library/ubuntu:24.04
+    dockerfile: Dockerfile.j2
+    command: /lib/systemd/systemd
+    systemd: always
+    network: molecule-redis
+    groups: [redis]
+  - name: redis3-resolute
+    image: docker.io/library/ubuntu:26.04
+    dockerfile: Dockerfile.j2
+    command: /lib/systemd/systemd
+    systemd: always
+    network: molecule-redis
+    groups: [redis]
+  - name: redis-standalone-resolute
+    image: docker.io/library/ubuntu:26.04
+    dockerfile: Dockerfile.j2
+    command: /lib/systemd/systemd
+    systemd: always
+    network: molecule-redis
+    groups: [standalone]
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      redis3-resolute:
+        redis_apt_suite: noble
+    group_vars:
+      all:
+        redis_password: "molecule-secret"
+      redis:
+        redis_sentinel_enabled: true
+        redis_sentinel_down_after_ms: 5000
+        redis_sentinel_failover_timeout: 20000
+        redis_config:
+          protected-mode: "yes"
+          maxmemory-policy: noeviction
+          save:
+            - 3600 1
+            - 300 100
+scenario:
+  test_sequence:
+    - destroy
+    - create
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy
+verifier:
+  name: ansible

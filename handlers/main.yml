@@ -1,0 +1,3 @@
+---
+# The role applies changes inline (CONFIG SET / SENTINEL SET); no handlers are needed.
+[]

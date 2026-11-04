@@ -1,0 +1,42 @@
+---
+# Packages from another Ubuntu release's archive (e.g. noble's redis on 26.04, to keep the version).
+# The source is shared with other pastir.* roles (same file, same content). Everything else from
+# that release gets priority 100, so the host's own release still wins for all other packages.
+- name: Add the Ubuntu archive of {{ redis_apt_suite }}
+  ansible.builtin.deb822_repository:
+    name: "ubuntu-{{ redis_apt_suite }}"
+    types: [deb]
+    uris: ["{{ redis_apt_archive_url }}"]
+    suites: ["{{ redis_apt_suite }}", "{{ redis_apt_suite }}-updates", "{{ redis_apt_suite }}-security"]
+    components: [main, universe]
+    signed_by: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+    install_python_debian: true
+  register: __redis_suite_repo
+
+- name: Lower the archive priority of {{ redis_apt_suite }}
+  ansible.builtin.copy:
+    dest: "/etc/apt/preferences.d/ubuntu-{{ redis_apt_suite }}"
+    content: |
+      # Managed by Ansible (pastir.*), do not edit.
+      # Only explicitly requested versions come from here.
+      Package: *
+      Pin: release n={{ redis_apt_suite }}
+      Pin-Priority: 100
+    owner: root
+    group: root
+    mode: "0644"
+  register: __redis_suite_pin
+
+# This role's packages come from that release (highest version there, incl. security updates).
+- name: Prefer for this role's packages the archive of {{ redis_apt_suite }}
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/pastir-redis
+    content: |
+      # Managed by Ansible (pastir.redis), do not edit.
+      Package: {{ __redis_packages | join(" ") }}
+      Pin: release n={{ redis_apt_suite }}
+      Pin-Priority: 990
+    owner: root
+    group: root
+    mode: "0644"
+  register: __redis_suite_pkg_pin

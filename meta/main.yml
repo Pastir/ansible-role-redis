@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  author: Pastir Ivan
+  role_name: redis
+  namespace: pastir
+  description: Redis server and Sentinel from the Ubuntu archive with runtime-applied, persisted configuration
+  license: Apache-2.0
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+  galaxy_tags:
+    - redis
+    - sentinel
+    - cache
+dependencies: []

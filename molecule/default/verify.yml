@@ -1,0 +1,83 @@
+---
+- name: Verify all nodes
+  hosts: all
+  become: true
+  environment:
+    REDISCLI_AUTH: molecule-secret
+  tasks:
+    - name: Runtime value was applied
+      ansible.builtin.command: redis-cli config get maxmemory-policy
+      register: __policy
+      changed_when: false
+      failed_when: __policy.stdout_lines[1] != 'allkeys-lru'
+
+    - name: Value is persisted by CONFIG REWRITE
+      ansible.builtin.command: grep -qx 'maxmemory-policy allkeys-lru' /etc/redis/redis.conf
+      changed_when: false
+
+    - name: Value survives a restart (standalone node only, the set must stay intact)
+      ansible.builtin.shell: |
+        set -o pipefail
+        systemctl restart redis-server
+        sleep 2
+        redis-cli config get maxmemory-policy | tail -n 1
+      args:
+        executable: /bin/bash
+      register: __persisted
+      changed_when: false
+      failed_when: __persisted.stdout != 'allkeys-lru'
+      when: inventory_hostname in groups['standalone']
+
+    - name: Packages are held
+      ansible.builtin.command: apt-mark showhold
+      register: __hold
+      changed_when: false
+      failed_when: "'redis-server' not in __hold.stdout_lines"
+
+- name: Verify Sentinel set
+  hosts: redis
+  become: true
+  environment:
+    REDISCLI_AUTH: molecule-secret
+  tasks:
+    - name: Wait until this node is a master or a connected replica
+      ansible.builtin.command: redis-cli info replication
+      register: __repl
+      until: "'role:master' in __repl.stdout or 'master_link_status:up' in __repl.stdout"
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Count roles
+      ansible.builtin.assert:
+        that:
+          - groups['redis'] | map('extract', hostvars, ['__repl', 'stdout']) | select('search', 'role:master') | list | length == 1
+          - groups['redis'] | map('extract', hostvars, ['__repl', 'stdout']) | select('search', 'master_link_status:up') | list | length == 2
+      run_once: true
+
+    - name: Every Sentinel knows exactly two other Sentinels (no phantom 127.0.0.1)
+      ansible.builtin.shell: |
+        set -o pipefail
+        redis-cli -p 26379 sentinel master mymaster | paste - - | awk -F'\t' '$1=="num-other-sentinels"{print $2}'
+      args:
+        executable: /bin/bash
+      register: __others
+      changed_when: false
+      failed_when: __others.stdout != '2'
+
+    - name: No Sentinel is known under 127.0.0.1
+      ansible.builtin.command: redis-cli -p 26379 sentinel sentinels mymaster
+      register: __sentinels
+      changed_when: false
+      failed_when: "'127.0.0.1' in __sentinels.stdout"
+
+- name: Versions
+  hosts: all
+  become: true
+  tasks:
+    - name: Redis 7.0.15 in the Sentinel set (also on 26.04), 8.0 standalone
+      ansible.builtin.command: redis-server --version
+      register: __ver
+      changed_when: false
+      failed_when: >-
+        __ver.stdout is not search('v=' ~ ('8.0.5' if inventory_hostname == 'redis-standalone-resolute' else '7.0.15'))

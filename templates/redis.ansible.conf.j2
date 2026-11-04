@@ -1,0 +1,11 @@
+{{ ansible_managed | comment }}
+# Included at the end of redis.conf; settings here win over it.
+{% for key, value in __redis_effective_config | dictsort if value is not none %}
+{%   if value is iterable and value is not string %}
+{%     for v in value %}
+{{ key }} {{ v }}
+{%     endfor %}
+{%   else %}
+{{ key }} {{ value }}
+{%   endif %}
+{% endfor %}
