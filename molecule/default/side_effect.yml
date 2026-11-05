@@ -1,7 +1,44 @@
 ---
+# 0. Standalone node: a dummy listener takes 127.0.0.1:6379 (like a local HAProxy frontend). It logs every
+#    request it gets; the role talks to Redis via redis_cli_host and must never reach it.
 # 1. Runtime config change on every node: applied without restart.
 # 2. Failover: stop the master, Sentinel promotes a replica. Re-running the role must keep
 #    the new topology (no node is pointed back at the initial master).
+- name: Occupy 127.0.0.1:6379 on the standalone node
+  hosts: standalone
+  become: true
+  tasks:
+    - name: Install the dummy listener
+      ansible.builtin.copy:
+        dest: /usr/local/bin/dummy-6379.py
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          # Answers every request with an error and logs it; bare connects (port checks) are not logged.
+          import socket
+          srv = socket.socket()
+          srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          srv.bind(("127.0.0.1", 6379))
+          srv.listen()
+          while True:
+              conn, _ = srv.accept()
+              data = conn.recv(4096)
+              if data:
+                  with open("/var/log/dummy-6379.log", "ab") as log:
+                      log.write(data + b"\n")
+                  conn.sendall(b"-ERR dummy listener\r\n")
+              conn.close()
+
+    - name: Start the dummy listener
+      ansible.builtin.command: systemd-run --unit=dummy-6379 /usr/bin/python3 /usr/local/bin/dummy-6379.py
+      changed_when: true
+
+    - name: Wait for the dummy listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6379
+        timeout: 10
+
 - name: Runtime change without restart
   hosts: all
   become: true

@@ -18,6 +18,10 @@ redis_port: 6379
 redis_bind:
   - "{{ ansible_facts['default_ipv4']['address'] }}"
   - 127.0.0.1
+# Address the role uses to reach THIS node's redis-server with redis-cli (CONFIG SET/REWRITE,
+# replica bootstrap, ...). Must be one of redis_bind (or bind all). Set it to the node's own IP
+# when 127.0.0.1:redis_port is taken by something else (e.g. a local HAProxy frontend for the master).
+redis_cli_host: 127.0.0.1
 # Password for clients (requirepass) and for replicas talking to the master (masterauth).
 # Empty -> no authentication.
 redis_password: ""
@@ -47,6 +51,8 @@ redis_sentinel_port: 26379
 redis_sentinel_bind:
   - "{{ ansible_facts['default_ipv4']['address'] }}"
   - 127.0.0.1
+# Address the role uses to reach THIS node's Sentinel with redis-cli. Must be one of redis_sentinel_bind.
+redis_sentinel_cli_host: "{{ redis_cli_host }}"
 redis_sentinel_master_name: mymaster
 redis_sentinel_quorum: 2
 redis_sentinel_down_after_ms: 30000

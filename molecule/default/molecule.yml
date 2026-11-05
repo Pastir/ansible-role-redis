@@ -3,6 +3,9 @@
 # archive, redis_apt_suite), 1 master + 2 replicas, Sentinel on each.
 # standalone: one 26.04 node (Redis 8.0) without Sentinel. Redis 7 replicas cannot follow an 8.0 master,
 # so releases are not mixed within one replication set.
+# redis_cli_host: the standalone node binds Redis only to its own IP and side_effect puts a dummy listener on
+# 127.0.0.1:6379 (like a local HAProxy frontend), which must never be contacted. redis2-noble reaches its
+# Redis and Sentinel through its own IP while keeping the default bind.
 dependency:
   name: galaxy
   enabled: false
@@ -41,8 +44,14 @@ provisioner:
   name: ansible
   inventory:
     host_vars:
+      redis2-noble:
+        redis_cli_host: "{{ ansible_facts['default_ipv4']['address'] }}"
       redis3-resolute:
         redis_apt_suite: noble
+      redis-standalone-resolute:
+        redis_bind:
+          - "{{ ansible_facts['default_ipv4']['address'] }}"
+        redis_cli_host: "{{ ansible_facts['default_ipv4']['address'] }}"
     group_vars:
       all:
         redis_password: "molecule-secret"

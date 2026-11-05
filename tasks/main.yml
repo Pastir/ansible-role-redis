@@ -6,9 +6,14 @@
       - redis_cluster_group in group_names or not redis_sentinel_enabled
       - redis_initial_master in groups[redis_cluster_group] | default([redis_initial_master])
       - redis_sentinel_quorum | int >= 1
+      - redis_bind | length == 0 or redis_bind | map('regex_replace', '^-', '') | select('in', [redis_cli_host] + __redis_bind_any) | list | length > 0
+      - >-
+        not redis_sentinel_enabled or redis_sentinel_bind | length == 0
+        or redis_sentinel_bind | map('regex_replace', '^-', '') | select('in', [redis_sentinel_cli_host] + __redis_bind_any) | list | length > 0
     fail_msg: >-
       Set redis_version (no default for {{ ansible_facts['distribution_release'] }}); with Sentinel the host
-      must be in group '{{ redis_cluster_group }}' and redis_initial_master must be one of its hosts.
+      must be in group '{{ redis_cluster_group }}' and redis_initial_master must be one of its hosts;
+      redis_cli_host ({{ redis_cli_host }}) must be in redis_bind and redis_sentinel_cli_host in redis_sentinel_bind.
     quiet: true
   tags: [redis, redis_install, redis_config, redis_sentinel]
 

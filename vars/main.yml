@@ -4,12 +4,14 @@ __redis_default_versions:
   resolute: "8.0.5"
 __redis_version: "{{ redis_version if redis_version else __redis_default_versions[redis_apt_suite or ansible_facts['distribution_release']] | default('') }}"
 __redis_packages: "{{ ['redis-server', 'redis-tools'] + (['redis-sentinel'] if redis_sentinel_enabled else []) }}"
-__redis_cli: "redis-cli -h 127.0.0.1 -p {{ redis_port }}"
-__redis_sentinel_cli: "redis-cli -h 127.0.0.1 -p {{ redis_sentinel_port }}"
+__redis_cli: "redis-cli -h {{ redis_cli_host }} -p {{ redis_port }}"
+__redis_sentinel_cli: "redis-cli -h {{ redis_sentinel_cli_host }} -p {{ redis_sentinel_port }}"
 __redis_is_initial_master: "{{ inventory_hostname == redis_initial_master }}"
 __redis_master_ip: >-
   {{ hostvars[redis_initial_master].redis_announce_ip
      | default(hostvars[redis_initial_master]['ansible_facts']['default_ipv4']['address']) }}
+# bind values that listen on every address (a leading "-" marks an optional address in Redis 7+).
+__redis_bind_any: ["*", "0.0.0.0", "::", "::*"]
 # Everything rendered into redis.ansible.conf and applied at runtime with CONFIG SET.
 __redis_effective_config: >-
   {{ redis_config

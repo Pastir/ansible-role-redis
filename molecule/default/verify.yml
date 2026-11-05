@@ -4,9 +4,11 @@
   become: true
   environment:
     REDISCLI_AUTH: molecule-secret
+  vars:
+    __cli_host: "{{ redis_cli_host | default('127.0.0.1') }}"
   tasks:
     - name: Runtime value was applied
-      ansible.builtin.command: redis-cli config get maxmemory-policy
+      ansible.builtin.command: redis-cli -h {{ __cli_host }} config get maxmemory-policy
       register: __policy
       changed_when: false
       failed_when: __policy.stdout_lines[1] != 'allkeys-lru'
@@ -20,12 +22,31 @@
         set -o pipefail
         systemctl restart redis-server
         sleep 2
-        redis-cli config get maxmemory-policy | tail -n 1
+        redis-cli -h {{ __cli_host }} config get maxmemory-policy | tail -n 1
       args:
         executable: /bin/bash
       register: __persisted
       changed_when: false
       failed_when: __persisted.stdout != 'allkeys-lru'
+      when: inventory_hostname in groups['standalone']
+
+    - name: Standalone Redis listens only on its own IP
+      ansible.builtin.command: redis-cli -h {{ __cli_host }} config get bind
+      register: __bind
+      changed_when: false
+      failed_when: __bind.stdout_lines[1] != ansible_facts['default_ipv4']['address']
+      when: inventory_hostname in groups['standalone']
+
+    - name: The dummy listener on 127.0.0.1:6379 is still there and was never asked anything
+      ansible.builtin.shell: |
+        set -o pipefail
+        systemctl is-active dummy-6379
+        cat /var/log/dummy-6379.log 2>/dev/null | wc -c
+      args:
+        executable: /bin/bash
+      register: __dummy
+      changed_when: false
+      failed_when: __dummy.stdout_lines != ['active', '0']
       when: inventory_hostname in groups['standalone']
 
     - name: Packages are held
@@ -41,7 +62,7 @@
     REDISCLI_AUTH: molecule-secret
   tasks:
     - name: Wait until this node is a master or a connected replica
-      ansible.builtin.command: redis-cli info replication
+      ansible.builtin.command: redis-cli -h {{ redis_cli_host | default('127.0.0.1') }} info replication
       register: __repl
       until: "'role:master' in __repl.stdout or 'master_link_status:up' in __repl.stdout"
       retries: 30

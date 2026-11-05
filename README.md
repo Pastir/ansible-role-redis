@@ -43,7 +43,8 @@ Do not mix major versions within one replication set: a Redis 7 replica cannot f
 | `redis_apt_suite` | `""` | Install from another Ubuntu release's archive, e.g. `noble` on 26.04 to keep 7.0.15. The default version follows this suite |
 | `redis_apt_archive_url` | `http://archive.ubuntu.com/ubuntu` | Archive for `redis_apt_suite` |
 | `redis_port` | `6379` | |
-| `redis_bind` | default IPv4 + 127.0.0.1 | Must contain 127.0.0.1: the role talks to Redis locally |
+| `redis_bind` | default IPv4 + 127.0.0.1 | Must contain `redis_cli_host` (or bind all: `*`, `0.0.0.0`, `::`, or be empty) |
+| `redis_cli_host` | `127.0.0.1` | Address the role's `redis-cli` uses to reach this node's Redis (CONFIG SET/REWRITE, replica bootstrap). See below |
 | `redis_password` | `""` | `requirepass` + `masterauth` (+ Sentinel `auth-pass`) |
 | `redis_config` | `protected-mode yes`, `maxmemory-policy noeviction` | Any directives. A list value gives one line per item (`save`) |
 | `redis_restart_allowed` | `false` | Restart when a setting cannot be applied at runtime |
@@ -52,11 +53,28 @@ Do not mix major versions within one replication set: a Redis 7 replica cannot f
 | `redis_initial_master` | first host of the group | Master at bootstrap only |
 | `redis_announce_ip` | default IPv4 | |
 | `redis_sentinel_enabled` | `false` | |
-| `redis_sentinel_port` / `redis_sentinel_bind` | `26379` / IPv4 + 127.0.0.1 | |
+| `redis_sentinel_port` / `redis_sentinel_bind` | `26379` / IPv4 + 127.0.0.1 | `redis_sentinel_bind` must contain `redis_sentinel_cli_host` |
+| `redis_sentinel_cli_host` | `{{ redis_cli_host }}` | Address the role's `redis-cli` uses to reach this node's Sentinel |
 | `redis_sentinel_master_name` | `mymaster` | |
 | `redis_sentinel_quorum` | `2` | |
 | `redis_sentinel_down_after_ms` / `_failover_timeout` / `_parallel_syncs` | `30000` / `180000` / `1` | |
 | `redis_sentinel_reset_on_announce_change` / `_reset_pause` | `true` / `15` | |
+
+### Redis not on 127.0.0.1
+
+If `127.0.0.1:<redis_port>` is taken by something else, for example a local HAProxy frontend that forwards to the
+current master, the role must not talk to it: `CONFIG SET`/`CONFIG REWRITE` would land on another node. Bind Redis
+to the node's own address and point the role there:
+
+```yaml
+redis_bind: ["{{ ansible_facts['default_ipv4']['address'] }}"]
+redis_cli_host: "{{ ansible_facts['default_ipv4']['address'] }}"
+```
+
+The role checks that `redis_cli_host` is in `redis_bind` (and `redis_sentinel_cli_host` in `redis_sentinel_bind`).
+On a fresh install (or an upgrade) Redis is restarted once so the managed `bind` is active before the role connects.
+The package's first start still uses its own `bind 127.0.0.1`, so on a new host the port on 127.0.0.1 must be free
+during installation.
 
 ## Example
 
@@ -86,6 +104,8 @@ The first run adds the `include` line and applies the managed settings at runtim
 `molecule test`:
 - a Sentinel set of two 24.04 nodes and one 26.04 node, all on 7.0.15 (`redis_apt_suite: noble`), and a standalone 26.04 node on 8.0.5;
 - runtime change without restart, and persistence after a restart;
+- `redis_cli_host`: the standalone node binds only its own IP while a dummy listener holds 127.0.0.1:6379 and must
+  receive nothing; one Sentinel node reaches Redis and Sentinel through its own IP;
 - real failover, then a role re-run that must keep the new topology;
 - no phantom sentinels.
 

@@ -32,7 +32,7 @@
 
 - name: Wait for Sentinel
   ansible.builtin.wait_for:
-    host: 127.0.0.1
+    host: "{{ redis_sentinel_cli_host }}"
     port: "{{ redis_sentinel_port }}"
     timeout: 30
   when: not ansible_check_mode

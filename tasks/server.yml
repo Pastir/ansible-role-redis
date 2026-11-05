@@ -25,7 +25,16 @@
   ansible.builtin.systemd_service:
     name: redis-server
     enabled: true
-    state: started
+    # A fresh install (or upgrade) starts Redis with the package's bind (loopback only). Restart it once
+    # so the managed bind is active and redis_cli_host is reachable. The package restarts it anyway.
+    state: "{{ 'restarted' if __redis_install is changed else 'started' }}"
+
+- name: Wait for Redis
+  ansible.builtin.wait_for:
+    host: "{{ redis_cli_host }}"
+    port: "{{ redis_port }}"
+    timeout: 30
+  when: not ansible_check_mode
 
 - name: Point a freshly bootstrapped replica at the initial master
   ansible.builtin.shell:
@@ -61,7 +70,7 @@
         argv:
           - redis-cli
           - -h
-          - 127.0.0.1
+          - "{{ redis_cli_host }}"
           - -p
           - "{{ redis_port | string }}"
           - config
