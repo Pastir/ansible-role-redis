@@ -24,6 +24,13 @@ epochs and known replicas/sentinels in `sentinel.conf`. The role does not fight 
   time. This removes stale entries such as a sentinel registered as `127.0.0.1`, which otherwise inflates the
   number of known sentinels and can block failover.
 
+**Check mode** (`--check --diff`)
+- Changes made at runtime do not run, but are reported as `changed` with the live value, read without changing
+  anything: `would CONFIG SET <key>: <live> -> <wanted>` (sizes such as `64mb` are compared in bytes, passwords
+  shown as `***`), `would SENTINEL SET <key>: <live> -> <wanted>`, `would set Sentinel announce-ip: ... then
+  SENTINEL RESET`. Package holds are shown for packages that are installed.
+- Not predicted: settings Redis refuses at runtime (they need a restart), and the replica bootstrap of a fresh node.
+
 ## Versions
 
 | Release | Default `redis_version` |
@@ -107,6 +114,7 @@ The first run adds the `include` line and applies the managed settings at runtim
 - `redis_cli_host`: the standalone node binds only its own IP while a dummy listener holds 127.0.0.1:6379 and must
   receive nothing; one Sentinel node reaches Redis and Sentinel through its own IP;
 - real failover, then a role re-run that must keep the new topology;
+- a real `ansible-playbook --check` with changed settings: the runtime changes are reported and none is applied;
 - no phantom sentinels.
 
 ## Installation

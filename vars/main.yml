@@ -12,6 +12,15 @@ __redis_master_ip: >-
      | default(hostvars[redis_initial_master]['ansible_facts']['default_ipv4']['address']) }}
 # bind values that listen on every address (a leading "-" marks an optional address in Redis 7+).
 __redis_bind_any: ["*", "0.0.0.0", "::", "::*"]
+# Redis size units (CONFIG GET reports sizes in bytes); used to compare values in check mode.
+__redis_size_units: {k: 1000, kb: 1024, m: 1000000, mb: 1048576, g: 1000000000, gb: 1073741824}
+# Monitored master settings applied with SENTINEL SET.
+__redis_sentinel_wanted: >-
+  {{ {'quorum': redis_sentinel_quorum | string,
+      'down-after-milliseconds': redis_sentinel_down_after_ms | string,
+      'failover-timeout': redis_sentinel_failover_timeout | string,
+      'parallel-syncs': redis_sentinel_parallel_syncs | string}
+     | combine({'auth-pass': redis_password} if redis_password else {}) }}
 # Everything rendered into redis.ansible.conf and applied at runtime with CONFIG SET.
 __redis_effective_config: >-
   {{ redis_config

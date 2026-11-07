@@ -67,13 +67,6 @@
   loop: "{{ __redis_sentinel_wanted | dict2items }}"
   loop_control:
     label: "{{ item.key }}={{ item.value if item.key != 'auth-pass' else '***' }}"
-  vars:
-    __redis_sentinel_wanted: >-
-      {{ {'quorum': redis_sentinel_quorum | string,
-          'down-after-milliseconds': redis_sentinel_down_after_ms | string,
-          'failover-timeout': redis_sentinel_failover_timeout | string,
-          'parallel-syncs': redis_sentinel_parallel_syncs | string}
-         | combine({'auth-pass': redis_password} if redis_password else {}) }}
   when:
     - __redis_sentinel_master is defined
     - item.key == 'auth-pass' or __redis_sentinel_master[item.key] | default('') != item.value
@@ -96,3 +89,27 @@
     - redis_sentinel_reset_on_announce_change
     - __redis_sentinel_announce_set is changed
     - __redis_sentinel_initial is not changed
+
+# Check mode: the commands above do not run. Report what they would change (values read above, read-only).
+- name: Report announced address change (check mode)
+  ansible.builtin.debug:
+    msg: >-
+      would set Sentinel announce-ip: '{{ __redis_sentinel_announce }}' -> '{{ redis_announce_ip }}'
+      {{- ', then SENTINEL RESET ' ~ redis_sentinel_master_name
+          if (redis_sentinel_reset_on_announce_change and __redis_sentinel_initial is not changed) else '' }}
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - __redis_sentinel_announce | default(redis_announce_ip) != redis_announce_ip
+
+- name: Report monitored master settings that would change (check mode)
+  ansible.builtin.debug:
+    msg: "would SENTINEL SET {{ item.key }}: {{ __redis_sentinel_master[item.key] | default('') }} -> {{ item.value }}"
+  loop: "{{ __redis_sentinel_wanted | dict2items | rejectattr('key', 'equalto', 'auth-pass') }}"
+  loop_control:
+    label: "{{ item.key }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - __redis_sentinel_master is defined
+    - __redis_sentinel_master[item.key] | default('') != item.value

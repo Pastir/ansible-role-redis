@@ -65,6 +65,45 @@
 - name: Apply changed settings
   when: __redis_managed is changed or __redis_include is changed
   block:
+    # Check mode: CONFIG SET does not run. Read the live values (read-only) and report what would change.
+    - name: Read live settings (check mode)
+      ansible.builtin.command:
+        argv: [redis-cli, -h, "{{ redis_cli_host }}", -p, "{{ redis_port | string }}", config, get, "{{ item.key }}"]
+      environment:
+        REDISCLI_AUTH: "{{ redis_password if redis_password else omit }}"
+      loop: "{{ __redis_effective_config | dict2items | rejectattr('value', 'none') }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: __redis_config_live
+      check_mode: false
+      changed_when: false
+      failed_when: false
+      no_log: "{{ item.key in ['requirepass', 'masterauth'] }}"
+      when: ansible_check_mode
+
+    - name: Report settings that would change (check mode)
+      ansible.builtin.debug:
+        msg: >-
+          would CONFIG SET {{ item.item.key }}:
+          {{ '***' if __secret else (__live if item.rc | default(1) == 0 else 'unknown (Redis not reachable)') }}
+          -> {{ '***' if __secret else __wanted }}
+      loop: "{{ __redis_config_live.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      vars:
+        __secret: "{{ item.item.key in ['requirepass', 'masterauth'] }}"
+        __live: "{{ item.stdout_lines[1] | default('') }}"
+        __raw: >-
+          {{ (item.item.value | join(' ') if (item.item.value is iterable and item.item.value is not string)
+              else item.item.value) | string | lower }}
+        __size: "{{ __raw | regex_search('^([0-9]+)(kb?|mb?|gb?)$', '\\1', '\\2') }}"
+        __wanted: "{{ (__size[0] | int * __redis_size_units[__size[1]]) | string if __size else __raw }}"
+      changed_when: true
+      when:
+        - ansible_check_mode
+        - item.rc | default(1) != 0 or __live | lower != __wanted
+      no_log: "{{ __secret }}"
+
     - name: Apply settings at runtime (CONFIG SET)
       ansible.builtin.command:
         argv:
@@ -95,16 +134,18 @@
       changed_when: true
       failed_when: __redis_rewrite.stdout != 'OK'
 
+    # Not in check mode: CONFIG SET did not run there, so it says nothing about restarts.
     - name: Collect settings that need a restart
       ansible.builtin.set_fact:
         __redis_restart_needed: "{{ __redis_config_set.results | rejectattr('stdout', 'equalto', 'OK') | map(attribute='item.key') | list }}"
+      when: not ansible_check_mode
 
     - name: Restart Redis for settings that cannot change at runtime
       ansible.builtin.systemd_service:
         name: redis-server
         state: restarted
       when:
-        - __redis_restart_needed | length > 0
+        - __redis_restart_needed | default([]) | length > 0
         - redis_restart_allowed
       throttle: 1
 
@@ -114,5 +155,5 @@
           Redis on {{ inventory_hostname }} must be restarted to apply: {{ __redis_restart_needed | join(', ') }}.
           Restart replicas first, or set redis_restart_allowed: true.
       when:
-        - __redis_restart_needed | length > 0
+        - __redis_restart_needed | default([]) | length > 0
         - not redis_restart_allowed

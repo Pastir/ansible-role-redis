@@ -4,6 +4,8 @@
 # 1. Runtime config change on every node: applied without restart.
 # 2. Failover: stop the master, Sentinel promotes a replica. Re-running the role must keep
 #    the new topology (no node is pointed back at the initial master).
+# 3. Check mode: a real `ansible-playbook --check` with changed settings reports the runtime changes
+#    (CONFIG SET, SENTINEL SET, announce-ip) and applies none of them.
 - name: Occupy 127.0.0.1:6379 on the standalone node
   hosts: standalone
   become: true
@@ -104,3 +106,77 @@
           maxmemory-policy: allkeys-lru
           save:
             - 900 1
+
+- name: Check mode reports runtime changes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run the role with --check and changed settings
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - -i
+          - "{{ ansible_inventory_sources | first }}"
+          - -e
+          - "{{ __extra | to_json }}"
+          - "{{ playbook_dir }}/check_mode.yml"
+      environment:
+        ANSIBLE_NOCOLOR: "1"
+        ANSIBLE_FORCE_COLOR: "0"
+      vars:
+        __extra:
+          redis_config:
+            protected-mode: "yes"
+            maxmemory-policy: volatile-lru
+            maxmemory: 64mb
+            client-query-buffer-limit: 1gb
+            save:
+              - 900 1
+          redis_sentinel_quorum: 1
+          redis_announce_ip: 192.0.2.10
+      register: __check
+      changed_when: false
+
+    - name: Assert the check run output
+      ansible.builtin.assert:
+        that:
+          - "'would CONFIG SET maxmemory-policy: allkeys-lru -> volatile-lru' in __check.stdout"
+          - "'would CONFIG SET maxmemory: 0 -> 67108864' in __check.stdout"
+          - "'CONFIG SET client-query-buffer-limit' not in __check.stdout"
+          - "'CONFIG SET protected-mode' not in __check.stdout"
+          - "'CONFIG SET save' not in __check.stdout"
+          - "'would SENTINEL SET quorum: 2 -> 1' in __check.stdout"
+          - "\"announce-ip: '' -> '192.0.2.10', then SENTINEL RESET mymaster\" in __check.stdout
+            or \"-> '192.0.2.10', then SENTINEL RESET mymaster\" in __check.stdout"
+          - "'must be restarted' not in __check.stdout"
+          - "'molecule-secret' not in __check.stdout"
+        fail_msg: "{{ __check.stdout_lines | select('search', 'would|must|ok=|ERROR') | list }}"
+
+- name: Nothing was applied by the check run
+  hosts: redis
+  become: true
+  environment:
+    REDISCLI_AUTH: molecule-secret
+  tasks:
+    - name: Read live values
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          redis-cli -h {{ __cli }} config get maxmemory-policy | tail -n 1
+          redis-cli -h {{ __scli }} -p 26379 sentinel master mymaster | grep -A1 '^quorum$' | tail -n 1
+          redis-cli -h {{ __scli }} -p 26379 sentinel config get announce-ip | tail -n 1
+        executable: /bin/bash
+      vars:
+        __cli: "{{ redis_cli_host | default('127.0.0.1') }}"
+        __scli: "{{ redis_sentinel_cli_host | default(__cli) }}"
+      register: __live
+      changed_when: false
+
+    - name: Assert live values are unchanged
+      ansible.builtin.assert:
+        that:
+          - __live.stdout_lines[0] == 'allkeys-lru'
+          - __live.stdout_lines[1] == '2'
+          - __live.stdout_lines[2] != '192.0.2.10'
+        fail_msg: "{{ __live.stdout_lines }}"

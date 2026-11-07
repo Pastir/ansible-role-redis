@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.2.1 — 2026-11
+
+### Added
+- Honest check mode: changes the role makes at runtime are reported as `changed` with the current and the wanted
+  value, read from the live service (read-only): `would CONFIG SET <key>: <live> -> <wanted>` (sizes such as
+  `64mb` compared in bytes, passwords shown as `***`), `would SENTINEL SET <key>`, `would set Sentinel
+  announce-ip ... then SENTINEL RESET`. Package holds are shown for installed packages.
+
+### Fixed
+- Check mode no longer reports every managed setting as "must be restarted to apply": `CONFIG SET` does not run
+  there, so nothing is concluded about restarts.
+
 ## 2.2.0 — 2026-11
 
 ### Added

@@ -1,0 +1,7 @@
+---
+# Run by side_effect.yml as `ansible-playbook --check`: runtime changes must be reported, not applied.
+- name: Role in check mode
+  hosts: redis
+  become: true
+  roles:
+    - role: pastir.redis

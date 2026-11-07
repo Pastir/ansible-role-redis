@@ -34,4 +34,5 @@
     name: "{{ item }}"
     selection: hold
   loop: "{{ __redis_packages }}"
-  when: redis_hold and not ansible_check_mode
+  # In check mode only packages that are already installed (a fresh install has nothing to hold yet).
+  when: redis_hold and (not ansible_check_mode or item in ansible_facts.packages)
